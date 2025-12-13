@@ -1,0 +1,33 @@
+{
+  "created_at": "2025-12-13 10:11:39",
+  "data_path": "data/raw/btc_binance_BTCUSDT_1d.csv",
+  "data_source": "binance",
+  "feature_set": "baseline",
+  "stage": 1,
+  "T_list": [
+    7,
+    10,
+    14,
+    21
+  ],
+  "X_list": [
+    0.06,
+    0.08,
+    0.1,
+    0.12,
+    0.15
+  ],
+  "init_train": 1500,
+  "oos_window": 63,
+  "step": 21,
+  "model_preference": "lightgbm",
+  "lgb_installed": true,
+  "selected_features": [
+    "rsi_14",
+    "ma7",
+    "ma21",
+    "vol21",
+    "macd_hist",
+    "ret1"
+  ]
+}

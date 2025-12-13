@@ -1,0 +1,62 @@
+{
+  "created_at": "2025-12-13 10:30:50",
+  "data_path": "data/raw/btc_binance_BTCUSDT_1d.csv",
+  "data_source": "binance",
+  "feature_set": "flow",
+  "stage": 2,
+  "T_list": [
+    7,
+    10,
+    14,
+    21
+  ],
+  "X_list": [
+    0.06,
+    0.08,
+    0.1,
+    0.12,
+    0.15
+  ],
+  "init_train": 1500,
+  "oos_window": 63,
+  "step": 21,
+  "model_preference": "lightgbm",
+  "lgb_installed": true,
+  "selected_features": [
+    "rsi_14",
+    "ma7",
+    "ma21",
+    "vol21",
+    "macd_hist",
+    "ret1",
+    "taker_buy_base_ratio",
+    "taker_buy_quote_ratio",
+    "trades_per_volume",
+    "quote_per_trade",
+    "taker_buy_base_ratio_chg1",
+    "taker_buy_quote_ratio_chg1",
+    "number_of_trades_chg1",
+    "quote_asset_volume_chg1",
+    "taker_buy_base_ratio_z7",
+    "taker_buy_base_ratio_z21",
+    "number_of_trades_z7",
+    "number_of_trades_z21",
+    "quote_asset_volume_z7",
+    "quote_asset_volume_z21"
+  ],
+  "baseline_summary": "outputs/backtest/binance_baseline_2018_2025/reversal_param_search_wf_results.csv",
+  "top_k": 10,
+  "candidates_file": "",
+  "candidates_used": [
+    "T14_X8",
+    "T21_X8",
+    "T21_X10",
+    "T14_X6",
+    "T10_X8",
+    "T14_X10",
+    "T21_X6",
+    "T21_X12",
+    "T10_X6",
+    "T14_X12"
+  ]
+}

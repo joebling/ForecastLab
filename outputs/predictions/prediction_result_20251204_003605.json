@@ -1,0 +1,33 @@
+{
+  "timestamp": "2025-12-04 00:36:05",
+  "current_price": 92172.921875,
+  "price_change_24h": 0.9006206027524888,
+  "prediction": {
+    "class": 0,
+    "class_name": "正常",
+    "probabilities": {
+      "top_prob": 0.0548887326871656,
+      "neutral_prob": 0.9381863386696581,
+      "bottom_prob": 0.006924928643176271
+    },
+    "confidence": 0.9381863386696581
+  },
+  "key_indicators": {
+    "price_position_20": 0.6902768649918548,
+    "rsi_14": 51.352864223187396,
+    "momentum_5": 0.013788675495584712,
+    "volume_ratio": 1.099383676564141,
+    "kdj_k": 71.43539041708968
+  },
+  "market_signal": {
+    "strength": "弱",
+    "action": "持有",
+    "risk_level": "中",
+    "additional_signals": []
+  },
+  "data_info": {
+    "data_points": 100,
+    "latest_date": "2025-12-03",
+    "features_count": 151
+  }
+}
