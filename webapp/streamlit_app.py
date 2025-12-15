@@ -7,11 +7,13 @@ import sys
 # robust import: prefer package import; ensure project root is on sys.path when running via streamlit
 try:
     from webapp.utils import load_summary, list_candidates, load_equity, load_trades, list_runs, load_meta
+    from webapp.utils import load_fold_metrics, load_fold_ranges
 except ImportError:
     _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     if _ROOT not in sys.path:
         sys.path.insert(0, _ROOT)
     from webapp.utils import load_summary, list_candidates, load_equity, load_trades, list_runs, load_meta
+    from webapp.utils import load_fold_metrics, load_fold_ranges
 
 import pandas as pd
 # 混淆矩阵（若后续提供逐样本标签/预测，可启用）
@@ -21,11 +23,59 @@ st.set_page_config(page_title='ForecastLab Prediction Review', layout='wide')
 
 st.sidebar.title('ForecastLab Review')
 
+# --- Query-param persistence helpers ---
+# Streamlit 1.30+ exposes st.query_params (preferred) but older versions use experimental_get/set_query_params.
+try:
+    _QP = st.query_params  # type: ignore[attr-defined]
+
+    def _qp_get(key: str, default: str = '') -> str:
+        v = _QP.get(key, default)
+        if isinstance(v, list):
+            return v[0] if v else default
+        return v
+
+    def _qp_get_list(key: str) -> list:
+        v = _QP.get(key, [])
+        if v is None:
+            return []
+        return v if isinstance(v, list) else [v]
+
+    def _qp_set(key: str, value):
+        _QP[key] = value
+
+except Exception:  # pragma: no cover
+
+    def _qp_get(key: str, default: str = '') -> str:
+        v = st.experimental_get_query_params().get(key, [default])
+        return v[0] if v else default
+
+    def _qp_get_list(key: str) -> list:
+        return st.experimental_get_query_params().get(key, [])
+
+    def _qp_set(key: str, value):
+        st.experimental_set_query_params(**{key: value})
+
+
+def _safe_int(s: str, default: int) -> int:
+    try:
+        return int(s)
+    except Exception:
+        return default
+
+
 # Select backtest run directory
 runs_root = os.path.join('outputs', 'backtest')
 run_names = list_runs(runs_root) if 'list_runs' in globals() else []
+
+# restore run from query param if possible
+_qp_run = _qp_get('run', '')
 run_default = run_names[0] if run_names else None
-run_sel = st.sidebar.selectbox('选择回测run（结果目录）', options=run_names, index=0) if run_names else None
+run_index = run_names.index(_qp_run) if (_qp_run in run_names) else 0
+
+run_sel = st.sidebar.selectbox('选择回测run（结果目录）', options=run_names, index=run_index, key='run_sel') if run_names else None
+if run_sel:
+    _qp_set('run', run_sel)
+
 base_dir = os.path.join(runs_root, run_sel) if run_sel else runs_root
 
 summary = load_summary(base_dir)
@@ -62,7 +112,7 @@ with tabs[0]:
         # 排序与筛选（加入准确率与平衡准确率）
         sort_candidates = ['f1_median', 'accuracy_median', 'balanced_accuracy_median', 'folds', 'T', 'X']
         sort_col = st.selectbox('排序列', [c for c in sort_candidates if c in summary.columns])
-        st.caption('字段说明：\n- f1_median：各折 Macro F1 的中位数，关注三类总体识别质量。\n- accuracy_median：各折整体准确率的中位数。\n- balanced_accuracy_median：各折平衡准确率的中位数（对类不平衡更稳健）。\n- folds：walk-forward OOS 折数。\n- T/X：标签参数（未来窗口/阈值）。')
+        st.caption('字段说明：\n- f1_median：各折 Macro F1 的中位数，关注三类总体识别质量。\n- accuracy_median：各折整体准确率的中位数。\n- balanced_accuracy_median：各折平衡准确率（各类召回均值）的中位数。\n- folds：walk-forward OOS 折数。\n- T/X：标签参数（未来窗口/阈值）。')
         with st.expander('candidate 命名示例（点击展开）', expanded=False):
             st.markdown('- 例如 candidate = `T7_X6`：\n  - T=7：观察/标签窗口 7 天。\n  - X=0.06：阈值 6%，未来 7 天内若上涨/下跌幅度 ≥ 6% 分别打 +1/-1 标签，否则 0。\n- 例如 candidate = `T21_X10`：T=21 天，X=0.10（10%）。')
         ascending = st.checkbox('升序', value=False)
@@ -70,12 +120,12 @@ with tabs[0]:
         # 展示与预测评估相关的核心列
         base_cols = ['candidate','T','X','folds','f1_median','precision_median','recall_median','accuracy_median','balanced_accuracy_median']
         cols_to_show = [c for c in base_cols if c in df_view.columns]
-        st.dataframe(df_view[cols_to_show], use_container_width=True)
+        st.dataframe(df_view[cols_to_show], width='stretch')
         # TopN
         cols = st.columns(3)
         with cols[0]:
             top_n = st.number_input('Top N', min_value=1, max_value=50, value=5)
-        st.dataframe(df_view[cols_to_show].head(top_n), use_container_width=True)
+        st.dataframe(df_view[cols_to_show].head(top_n), width='stretch')
 
 # 数据与标签（展示基本数据文件信息与标签定义）
 with tabs[1]:
@@ -96,7 +146,7 @@ with tabs[1]:
     if not summary.empty and all(k in summary.columns for k in ['T','X','f1_median']):
         st.subheader('候选参数分布（T, X）')
         fig_scatter = px.scatter(summary, x='T', y='X', size=None, color='f1_median', title='候选参数分布（按 F1 着色）')
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width='stretch')
     st.caption('评估指标说明：\n- Macro F1（f1_median）：各类F1简单平均的稳健聚合，用于排序。\n- Accuracy：整体正确率，类不平衡时可能偏高。\n- Balanced Accuracy：对每类召回率的平均，抵抗不平衡。\n- Precision/Recall（macro）：分别衡量预测的准确性与检出能力。')
 
     st.subheader('样本构造可视化（标签生成演示）')
@@ -136,7 +186,7 @@ with tabs[1]:
   - **OOS结束日期** = 第 `train_end_ix+oos_window-1` 行日期
 
 - 直观例子：
-  - **fold=0**：训练集 = “起始日期 → 起始日期后第 `init_train` 条数据对应日期”；OOS = 紧接着往后数 `oos_window` 条数据的日期区间。
+  - **fold=0**：训练集
   - **fold=1**：训练结束点在 fold=0 的基础上**再往后推进 `step` 条**，因此训练集更长、OOS 整体也更靠后。
 
 > 注：这里的“天”本质是数据行数（日频则≈自然日，但仍以交易序列为准）。
@@ -207,7 +257,7 @@ with tabs[1]:
             n_show = min(int(show_folds_demo), max_folds_possible)
             wf_table = pd.DataFrame([build_wf_row(f) for f in range(n_show)])
 
-        st.dataframe(wf_table, use_container_width=True)
+        st.dataframe(wf_table, width='stretch')
 
         # 计算未来窗口的最大/最小价并生成 upswing/drawdown
         T_int = int(T_demo)
@@ -238,7 +288,7 @@ with tabs[1]:
             '开始日期': [df_show['timestamp'].iloc[0]],
             '结束日期': [df_show['timestamp'].iloc[-1]]
         })
-        st.dataframe(info_table, use_container_width=True)
+        st.dataframe(info_table, width='stretch')
 
         # 每条样本的起始日期（即当前行的timestamp）+ 标签 + 未来窗口覆盖区间
         sample_table = df_show[['timestamp', 'label']].copy()
@@ -249,7 +299,7 @@ with tabs[1]:
         sample_table['未来窗口开始日期'] = df_show['timestamp'].shift(-1).values
         sample_table['未来窗口结束日期'] = df_show['timestamp'].shift(-T_int).values
 
-        st.dataframe(sample_table.reset_index(drop=True), use_container_width=True)
+        st.dataframe(sample_table.reset_index(drop=True), width='stretch')
 
         # 价格 + 信号（带滑动时间轴）
         st.subheader('价格与信号（可滑动）')
@@ -260,13 +310,13 @@ with tabs[1]:
         fig_price.add_scatter(x=df_sig_up['timestamp'], y=df_sig_up['close'], mode='markers', name='Upswing(+1)', marker=dict(color='green', symbol='triangle-up', size=8))
         fig_price.add_scatter(x=df_sig_dn['timestamp'], y=df_sig_dn['close'], mode='markers', name='Drawdown(-1)', marker=dict(color='red', symbol='triangle-down', size=8))
         fig_price.update_layout(xaxis=dict(rangeslider=dict(visible=True), type='date'))
-        st.plotly_chart(fig_price, use_container_width=True)
+        st.plotly_chart(fig_price, width='stretch')
 
         # 标签分布柱状图
         st.subheader('标签分布（柱状图）')
         vc_show = df_show['label'].value_counts().sort_index()
         fig_bar = px.bar(x=vc_show.index.astype(str), y=vc_show.values, labels={'x':'标签','y':'样本数'}, title='最近窗口标签分布')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width='stretch')
         st.write({'class_counts_recent': {'-1': int(vc_show.get(-1,0)), '0': int(vc_show.get(0,0)), '1': int(vc_show.get(1,0))}})
 
         # 未来涨跌幅与阈值线（可滑动）
@@ -275,12 +325,12 @@ with tabs[1]:
         fig_ud.add_hline(y=X_demo, line_dash='dot', line_color='green', annotation_text=f'阈值 +{X_demo:.2f}')
         fig_ud.add_hline(y=X_demo, line_dash='dot', line_color='red', annotation_text=f'阈值 -{X_demo:.2f}')
         fig_ud.update_layout(xaxis=dict(rangeslider=dict(visible=True), type='date'))
-        st.plotly_chart(fig_ud, use_container_width=True)
+        st.plotly_chart(fig_ud, width='stretch')
 
         # 类分布与示例片段
         vc = df['label'].value_counts().sort_index()
         st.write({'class_counts_total': {'-1': int(vc.get(-1,0)), '0': int(vc.get(0,0)), '1': int(vc.get(1,0))}})
-        st.dataframe(df_show[['timestamp','close','future_upswing','future_drawdown','label']].head(50), use_container_width=True)
+        st.dataframe(df_show[['timestamp','close','future_upswing','future_drawdown','label']].head(50), width='stretch')
     except Exception as e:
         st.warning(f'样本构造演示失败：{e}')
 
@@ -292,25 +342,105 @@ with tabs[2]:
     else:
         st.markdown('在每个 OOS 折上计算 precision/recall/f1/accuracy/balanced_accuracy（宏平均或整体），此处展示聚合后的中位/均值。')
         cols_pred = [c for c in ['candidate','folds','f1_median','precision_median','recall_median','accuracy_median','balanced_accuracy_median'] if c in summary.columns]
-        st.dataframe(summary[cols_pred].sort_values('f1_median', ascending=False), use_container_width=True)
+        st.dataframe(summary[cols_pred].sort_values('f1_median', ascending=False), width='stretch')
 
         st.subheader('候选每折评估明细')
-        # 选择候选并读取 fold_metrics.csv
         cands = list_candidates(base_dir) if 'list_candidates' in globals() else []
-        cand_sel = st.selectbox('选择候选查看每折明细', options=cands)
+
+        _qp_cand = _qp_get('cand', '')
+        _cand_idx = cands.index(_qp_cand) if (_qp_cand in cands) else 0
+        cand_sel = st.selectbox('选择候选查看每折明细', options=cands, index=_cand_idx if cands else 0, key='cand_sel')
         if cand_sel:
-            fm_path = os.path.join(base_dir, cand_sel, 'fold_metrics.csv')
-            if not os.path.exists(fm_path):
-                st.warning(f'未找到 {fm_path}，请先重新执行回测生成明细。')
+            _qp_set('cand', cand_sel)
+
+        if cand_sel:
+            df_fm = load_fold_metrics(base_dir, cand_sel)
+            if df_fm.empty:
+                st.warning(f'未找到 {os.path.join(base_dir, cand_sel, "fold_metrics.csv")}，请先重新执行回测生成明细。')
             else:
-                df_fm = pd.read_csv(fm_path)
+                # 可选：fold 日期区间映射（如果 run 导出了 fold_ranges.csv，就能精确显示每折 train/test 日期）
+                df_ranges = load_fold_ranges(base_dir)
+                if not df_ranges.empty and 'fold' in df_ranges.columns:
+                    try:
+                        df_fm = df_fm.merge(df_ranges, on='fold', how='left')
+                    except Exception:
+                        pass
+
                 # 展示核心指标与类分布
                 show_cols = [
-                    'fold','precision','recall','f1','accuracy','balanced_accuracy',
-                    'y_true_-1','y_true_0','y_true_1','y_pred_-1','y_pred_0','y_pred_1'
+                    'fold',
+                    'precision','recall','f1','accuracy','balanced_accuracy',
+                    'y_true_-1','y_true_0','y_true_1','y_pred_-1','y_pred_0','y_pred_1',
+                    'train_start','train_end','test_start','test_end'
                 ]
                 cols_present = [c for c in show_cols if c in df_fm.columns]
-                st.dataframe(df_fm[cols_present], use_container_width=True)
+                st.dataframe(df_fm[cols_present], width='stretch')
+
+                st.divider()
+                st.subheader('Fold 指标趋势')
+
+                # 1) fold vs f1/accuracy 折线
+                metric_opts = [m for m in ['f1','balanced_accuracy','accuracy','precision','recall'] if m in df_fm.columns]
+                base_metric = 'f1' if 'f1' in metric_opts else (metric_opts[0] if metric_opts else None)
+                chosen_metrics = st.multiselect('选择要画的指标（折线）', options=metric_opts, default=[base_metric] if base_metric else [])
+
+                if chosen_metrics:
+                    df_long = df_fm[['fold'] + chosen_metrics].melt(id_vars=['fold'], var_name='metric', value_name='value')
+                    fig_line = px.line(df_long, x='fold', y='value', color='metric', markers=True, title=f'{cand_sel}：fold 指标趋势')
+                    st.plotly_chart(fig_line, width='stretch')
+                else:
+                    st.caption('该 run 的 fold_metrics.csv 未包含可用指标列（f1/accuracy 等）。')
+
+                # 2) 每 fold 类别分布（train / true / pred）
+                st.subheader('每 fold 类别分布（Train / True / Pred）')
+                colA, colB, colC = st.columns(3)
+
+                def _plot_fold_class_dist(df_in: pd.DataFrame, prefix: str, title: str):
+                    cols = [f'{prefix}_-1', f'{prefix}_0', f'{prefix}_1']
+                    cols = [c for c in cols if c in df_in.columns]
+                    if len(cols) != 3:
+                        return None
+                    tmp = df_in[['fold'] + cols].copy()
+                    tmp = tmp.rename(columns={
+                        f'{prefix}_-1': '-1',
+                        f'{prefix}_0': '0',
+                        f'{prefix}_1': '1',
+                    })
+                    long = tmp.melt(id_vars=['fold'], var_name='label', value_name='count')
+                    fig = px.bar(long, x='fold', y='count', color='label', barmode='stack', title=title)
+                    return fig
+
+                with colA:
+                    fig_train = _plot_fold_class_dist(df_fm, 'y_train', 'Train 标签分布（按 fold，堆叠）')
+                    if fig_train is not None:
+                        st.plotly_chart(fig_train, width='stretch')
+                    else:
+                        st.caption('fold_metrics.csv 未包含 y_train_-1/y_train_0/y_train_1 列（需要重新跑回测生成）。')
+
+                with colB:
+                    fig_true = _plot_fold_class_dist(df_fm, 'y_true', 'OOS True 标签分布（按 fold，堆叠）')
+                    if fig_true is not None:
+                        st.plotly_chart(fig_true, width='stretch')
+                    else:
+                        st.caption('fold_metrics.csv 未包含 y_true_-1/y_true_0/y_true_1 列，无法绘制 True 分布。')
+
+                with colC:
+                    fig_pred = _plot_fold_class_dist(df_fm, 'y_pred', 'OOS Pred 标签分布（按 fold，堆叠）')
+                    if fig_pred is not None:
+                        st.plotly_chart(fig_pred, width='stretch')
+                    else:
+                        st.caption('fold_metrics.csv 未包含 y_pred_-1/y_pred_0/y_pred_1 列，无法绘制 Pred 分布。')
+
+                # 3) fold -> 日期区间（如果可用）
+                st.subheader('Fold 对应日期区间')
+                if all(c in df_fm.columns for c in ['train_start','train_end','test_start','test_end']):
+                    st.caption('日期来自 run 目录中的 fold_ranges.csv（若不存在则此处为空）。')
+                    st.dataframe(
+                        df_fm[['fold','train_start','train_end','test_start','test_end']].sort_values('fold'),
+                        width='stretch'
+                    )
+                else:
+                    st.caption('该 run 未提供 fold_ranges.csv（或列缺失），因此无法映射每 fold 的 train/test 日期区间。')
 
 # 候选对比（TopN对比：仅分类指标）
 with tabs[3]:
@@ -318,19 +448,19 @@ with tabs[3]:
     if summary.empty:
         st.info('暂无 summary 数据')
     else:
-        top_n_cmp = st.number_input('Top N（按 f1_median）', min_value=1, max_value=20, value=5)
+        top_n_cmp = st.number_input('Top N（按 f1_median）', min_value=1, max_value=20, value=5, key='top_n_cmp_main')
         df_top_cmp = summary.sort_values('f1_median', ascending=False).head(top_n_cmp)
         cols_cmp = [c for c in ['candidate','T','X','folds','f1_median','precision_median','recall_median','accuracy_median','balanced_accuracy_median'] if c in df_top_cmp.columns]
-        st.dataframe(df_top_cmp[cols_cmp], use_container_width=True)
+        st.dataframe(df_top_cmp[cols_cmp], width='stretch')
         # 对比图：F1 vs Balanced Accuracy（示例）
         if all(k in df_top_cmp.columns for k in ['f1_median','balanced_accuracy_median']):
             fig_cmp = px.scatter(df_top_cmp, x='f1_median', y='balanced_accuracy_median', hover_name='candidate', title='F1 vs Balanced Accuracy (TopN)')
-            st.plotly_chart(fig_cmp, use_container_width=True)
+            st.plotly_chart(fig_cmp, width='stretch')
 
-        # ===== New: 实验矩阵（同一 Tab 内多 run 对比，不依赖左侧 bar） =====
+        # ===== 实验矩阵：多 run 对比 =====
         st.divider()
-        st.subheader('实验矩阵：多 run 指标对比（同一 Tab 内完成）')
-        st.caption('选择多个 run 后，自动取 candidate 交集并生成对比表（含 delta）。适合不同特征/参数/模型版本的横向对比。')
+        st.subheader('实验矩阵：多 run 指标对比')
+        st.caption('从各 run 的 summary CSV 读取指标，按 candidate 进行并集/交集对齐，并计算相对基准 run 的 delta。')
 
         if not run_names:
             st.info('未发现可用 runs（outputs/backtest/* 下需包含 reversal_param_search_wf_results.csv）')
@@ -346,19 +476,38 @@ with tabs[3]:
                             break
                 if len(_defaults) < 2:
                     _defaults = run_names[:2]
-                runs_selected = st.multiselect('选择多个 run（建议 2~5 个）', options=run_names, default=_defaults)
+
+                _qp_runs = [r for r in _qp_get_list('runs') if r in run_names]
+                runs_selected = st.multiselect('选择多个 run（建议 2~5 个）', options=run_names, default=_qp_runs or _defaults, key='runs_selected')
+                if runs_selected:
+                    _qp_set('runs', list(runs_selected))
+
             with colx[1]:
-                sort_by = st.selectbox('排序指标', options=['f1_median','balanced_accuracy_median','accuracy_median','precision_median','recall_median'])
+                metric_candidates = ['f1_median','balanced_accuracy_median','accuracy_median','precision_median','recall_median']
+                _qp_sort = _qp_get('sort', 'f1_median')
+                sort_by = st.selectbox('排序指标', options=metric_candidates, index=(metric_candidates.index(_qp_sort) if _qp_sort in metric_candidates else 0), key='sort_by')
+                _qp_set('sort', sort_by)
+
             with colx[2]:
-                base_run = st.selectbox('基准 run（delta = run - base）', options=runs_selected if runs_selected else run_names)
+                base_opts = runs_selected if runs_selected else run_names
+                _qp_base = _qp_get('base', '')
+                base_idx = base_opts.index(_qp_base) if (_qp_base in base_opts) else 0
+                base_run = st.selectbox('基准 run（delta = run - base）', options=base_opts, index=base_idx, key='base_run')
+                _qp_set('base', base_run)
 
             mode_col = st.columns([1, 1, 1])
             with mode_col[0]:
-                cand_mode = st.radio('candidate 范围', options=['并集', '交集'], index=0, horizontal=True)
+                _qp_mode = _qp_get('cand_mode', '并集')
+                cand_mode = st.radio('candidate 范围', options=['并集', '交集'], index=(0 if _qp_mode != '交集' else 1), horizontal=True, key='cand_mode')
+                _qp_set('cand_mode', cand_mode)
             with mode_col[1]:
-                min_presence = st.number_input('至少出现在 N 个 run 中', min_value=1, max_value=max(1, len(runs_selected) if runs_selected else len(run_names)), value=1)
+                _qp_pres = _safe_int(_qp_get('presence', '1'), 1)
+                min_presence = st.number_input('至少出现在 N 个 run 中', min_value=1, max_value=max(1, len(runs_selected) if runs_selected else len(run_names)), value=_qp_pres, key='min_presence')
+                _qp_set('presence', int(min_presence))
             with mode_col[2]:
-                show_top = st.number_input('展示 Top N（按基准 run 排序）', min_value=5, max_value=200, value=50)
+                _qp_show = _safe_int(_qp_get('show_top', '50'), 50)
+                show_top = st.number_input('展示 Top N（按基准 run 排序）', min_value=5, max_value=200, value=_qp_show, key='show_top')
+                _qp_set('show_top', int(show_top))
 
             metrics = ['f1_median','balanced_accuracy_median','accuracy_median','precision_median','recall_median','folds']
 
@@ -369,11 +518,10 @@ with tabs[3]:
                 keep = ['candidate'] + [m for m in metrics if m in d.columns]
                 return d[keep].copy()
 
-            if runs_selected and base_run in runs_selected and len(runs_selected) >= 2:
+            if runs_selected and base_run in (runs_selected or []) and len(runs_selected) >= 2:
                 dfs = {rn: _load_run_df(rn) for rn in runs_selected}
-
-                # candidate union / intersection
                 cand_sets = {rn: set(df['candidate'].tolist()) for rn, df in dfs.items() if not df.empty and 'candidate' in df.columns}
+
                 if not cand_sets:
                     st.warning('所选 runs 的 summary 为空，无法对比。')
                 else:
@@ -382,7 +530,6 @@ with tabs[3]:
                     else:
                         candidates_set = set.union(*cand_sets.values())
 
-                    # presence count filter
                     def _presence(c: str) -> int:
                         return sum(1 for s in cand_sets.values() if c in s)
 
@@ -391,7 +538,6 @@ with tabs[3]:
                     if not candidates:
                         st.warning('没有满足条件的 candidate（可能是 min_presence 过高）。')
                     else:
-                        # -------- pivot-like wide table (MultiIndex columns) --------
                         rows = []
                         for cand in candidates:
                             row = {('','candidate'): cand, ('','presence'): _presence(cand)}
@@ -414,112 +560,20 @@ with tabs[3]:
                         wide = pd.DataFrame(rows)
                         wide.columns = pd.MultiIndex.from_tuples(wide.columns, names=['run', 'metric'])
 
-                        # sort by base metric (NaN -> bottom)
                         sort_key = (base_run, sort_by)
                         if sort_key in wide.columns:
                             wide = wide.sort_values(sort_key, ascending=False, na_position='last')
 
-                        # highlight winners per-metric across runs (e.g., baseline vs flow)
-                        def _highlight_winners(df: pd.DataFrame) -> pd.DataFrame:
-                            styles = pd.DataFrame('', index=df.index, columns=df.columns)
-                            run_cols = [c for c in df.columns if isinstance(c, tuple) and c[0] not in ('', None)]
-                            # per metric, find row-wise strict winner among runs
-                            for m in metrics:
-                                cols_m = [c for c in run_cols if c[1] == m]
-                                if len(cols_m) <= 1:
-                                    continue
-                                vals = df[cols_m].apply(pd.to_numeric, errors='coerce')
-                                # strict winner: value == max and unique max
-                                maxv = vals.max(axis=1, skipna=True)
-                                # count how many columns equal max (ties -> no highlight)
-                                eq_max_cnt = vals.eq(maxv, axis=0).sum(axis=1)
-                                for c in cols_m:
-                                    is_winner = vals[c].eq(maxv) & maxv.notna() & (eq_max_cnt == 1)
-                                    styles.loc[is_winner, c] = 'background-color: #d9fdd3'
-                            return styles
+                        if show_top:
+                            wide_show = wide.head(int(show_top))
+                        else:
+                            wide_show = wide
 
-                        try:
-                            st.dataframe(wide.head(int(show_top)).style.apply(_highlight_winners, axis=None), use_container_width=True)
-                        except Exception:
-                            st.dataframe(wide.head(int(show_top)), use_container_width=True)
+                        st.dataframe(wide_show, width='stretch')
+            else:
+                st.caption('请选择至少 2 个 run，并指定一个基准 run。')
 
-                        # --------- 逐 fold 对比（可选，1 个 candidate × 2 个 run） ---------
-                        st.subheader('逐 fold 对比（可选，1 个 candidate × 2 个 run）')
-                        colf = st.columns(3)
-                        with colf[0]:
-                            # candidates that exist in at least 2 runs (so we can find two fold files)
-                            fold_cands = [c for c in candidates if _presence(c) >= 2]
-                            cand_fold = st.selectbox('选择 candidate', options=fold_cands)
-                        with colf[1]:
-                            fold_run_a = st.selectbox('Run A（fold 明细）', options=runs_selected, index=0)
-                        with colf[2]:
-                            fold_run_b = st.selectbox('Run B（fold 明细）', options=runs_selected, index=1 if len(runs_selected) > 1 else 0)
-
-                        if cand_fold and fold_run_a and fold_run_b and fold_run_a != fold_run_b:
-                            a_path = os.path.join(runs_root, fold_run_a, cand_fold, 'fold_metrics.csv')
-                            b_path = os.path.join(runs_root, fold_run_b, cand_fold, 'fold_metrics.csv')
-                            if os.path.exists(a_path) and os.path.exists(b_path):
-                                fa = pd.read_csv(a_path)
-                                fb = pd.read_csv(b_path)
-                                keepf = [c for c in ['fold','f1','precision','recall','accuracy','balanced_accuracy'] if c in fa.columns and c in fb.columns]
-                                mfold = fa[keepf].merge(fb[keepf], on='fold', how='inner', suffixes=(f'__{fold_run_a}', f'__{fold_run_b}'))
-                                if not mfold.empty:
-                                    mfold[f'delta({fold_run_b}-{fold_run_a})__f1'] = mfold.get(f'f1__{fold_run_b}') - mfold.get(f'f1__{fold_run_a}')
-                                    st.dataframe(mfold, use_container_width=True)
-                                    if f'f1__{fold_run_a}' in mfold.columns and f'f1__{fold_run_b}' in mfold.columns:
-                                        fig_fold = px.line(mfold, x='fold', y=[f'f1__{fold_run_a}', f'f1__{fold_run_b}'], title=f'逐fold F1: {cand_fold}')
-                                        st.plotly_chart(fig_fold, use_container_width=True)
-                            else:
-                                st.caption(f'缺少 fold_metrics.csv：\n- {a_path}\n- {b_path}')
-
-            # Cross-run comparison (optional)
-            if run_names and len(run_names) >= 2:
-                st.subheader('跨 run 对比（同一 candidate 在不同数据源/配置下的指标差异）')
-                colr = st.columns(2)
-                with colr[0]:
-                    run_a = st.selectbox('Run A', options=run_names, index=0)
-                with colr[1]:
-                    run_b = st.selectbox('Run B', options=run_names, index=1)
-
-                if run_a and run_b and run_a != run_b:
-                    a_dir = os.path.join(runs_root, run_a)
-                    b_dir = os.path.join(runs_root, run_b)
-                    df_a = load_summary(a_dir)
-                    df_b = load_summary(b_dir)
-                    if (not df_a.empty) and (not df_b.empty) and all(c in df_a.columns for c in ['candidate','f1_median']) and all(c in df_b.columns for c in ['candidate','f1_median']):
-                        m = df_a[['candidate','f1_median','balanced_accuracy_median']].merge(
-                            df_b[['candidate','f1_median','balanced_accuracy_median']],
-                            on='candidate',
-                            how='inner',
-                            suffixes=(f'_{run_a}', f'_{run_b}')
-                        )
-                        if not m.empty:
-                            m[f'f1_diff_{run_b}_minus_{run_a}'] = m[f'f1_median_{run_b}'] - m[f'f1_median_{run_a}']
-                            st.dataframe(m.sort_values(f'f1_diff_{run_b}_minus_{run_a}', ascending=False), use_container_width=True)
-                            fig = px.scatter(
-                                m,
-                                x=f'f1_median_{run_a}',
-                                y=f'f1_median_{run_b}',
-                                hover_name='candidate',
-                                title='F1 对比散点（越接近对角线越一致）'
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info('Run A / Run B 没有可用的 summary 或字段不完整。')
-
-# 文档（项目说明与模型定义）
+# 文档
 with tabs[4]:
-    st.header('项目文档与模型说明')
-    doc_files = [
-        ('项目结构与重组方案', os.path.join(os.path.dirname(__file__), '..', 'PROJECT_REORGANIZATION_PLAN.md')),
-        ('反转事件模型定义', os.path.join(os.path.dirname(__file__), '..', 'Reversal_Event_Model.md'))
-    ]
-    for doc_title, doc_path in doc_files:
-        try:
-            with open(doc_path, 'r', encoding='utf-8') as f:
-                doc_content = f.read()
-            with st.expander(doc_title, expanded=False):
-                st.markdown(doc_content)
-        except Exception as e:
-            st.warning(f'无法读取 {doc_title}：{e}')
-    st.caption('如需补充自定义文档，请将 Markdown 文件放入项目根目录，并在此处添加。')
+    st.header('文档与说明')
+    st.markdown('此处为使用说明文档，后续提供在线文档链接。')

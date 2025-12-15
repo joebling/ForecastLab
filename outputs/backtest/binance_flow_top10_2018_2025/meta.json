@@ -1,5 +1,5 @@
 {
-  "created_at": "2025-12-13 10:30:50",
+  "created_at": "2025-12-14 16:32:26",
   "data_path": "data/raw/btc_binance_BTCUSDT_1d.csv",
   "data_source": "binance",
   "feature_set": "flow",
@@ -44,6 +44,7 @@
     "quote_asset_volume_z7",
     "quote_asset_volume_z21"
   ],
+  "fold_ranges_csv": "outputs/backtest/binance_flow_top10_2018_2025/fold_ranges.csv",
   "baseline_summary": "outputs/backtest/binance_baseline_2018_2025/reversal_param_search_wf_results.csv",
   "top_k": 10,
   "candidates_file": "",

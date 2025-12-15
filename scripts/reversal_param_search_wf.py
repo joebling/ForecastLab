@@ -267,6 +267,34 @@ def main(args):
 
     features = _select_features(df_features, args.feature_set)
 
+    # --- export fold date ranges (based on df_features) ---
+    # df_features already had dropna, so this aligns with the samples actually used downstream.
+    fold_ranges_path = os.path.join(args.out_root, 'fold_ranges.csv')
+    try:
+        n_feat = len(df_features)
+        splits_for_ranges = walk_forward_splits(n_feat, args.init_train, args.oos_window, args.step)
+        rows = []
+        for fold_idx, (train_slice, oos_slice) in enumerate(splits_for_ranges):
+            tr_start = int(train_slice.start or 0)
+            tr_end = int(train_slice.stop) - 1
+            te_start = int(oos_slice.start)
+            te_end = int(oos_slice.stop) - 1
+            rows.append({
+                'fold': fold_idx,
+                'train_start': str(df_features['timestamp'].iloc[tr_start]) if 0 <= tr_start < n_feat else None,
+                'train_end': str(df_features['timestamp'].iloc[tr_end]) if 0 <= tr_end < n_feat else None,
+                'test_start': str(df_features['timestamp'].iloc[te_start]) if 0 <= te_start < n_feat else None,
+                'test_end': str(df_features['timestamp'].iloc[te_end]) if 0 <= te_end < n_feat else None,
+                'train_start_ix': tr_start,
+                'train_end_ix': tr_end,
+                'test_start_ix': te_start,
+                'test_end_ix': te_end,
+            })
+        pd.DataFrame(rows).to_csv(fold_ranges_path, index=False)
+    except Exception:
+        # do not fail the run if exporting fold ranges fails
+        fold_ranges_path = ''
+
     # candidates control (for stage-2)
     stage = int(args.stage)
     candidates_filter: List[str] = []
@@ -293,6 +321,7 @@ def main(args):
         'model_preference': 'lightgbm' if LGB_INSTALLED else 'random_forest',
         'lgb_installed': bool(LGB_INSTALLED),
         'selected_features': features,
+        'fold_ranges_csv': fold_ranges_path,
     }
     if stage == 2:
         meta.update({
@@ -342,6 +371,7 @@ def main(args):
                 except Exception:
                     prec = rec = f1 = acc = bacc = 0
 
+                vc_train = y_train.value_counts().to_dict()
                 vc_true = y_oos.value_counts().to_dict()
                 vc_pred = pd.Series(preds_fold).value_counts().to_dict()
 
@@ -352,6 +382,9 @@ def main(args):
                     'fold': fold_idx, 'T': T, 'X': X,
                     'precision': prec, 'recall': rec, 'f1': f1,
                     'accuracy': acc, 'balanced_accuracy': bacc,
+                    # train distribution
+                    'y_train_-1': g(vc_train, -1), 'y_train_0': g(vc_train, 0), 'y_train_1': g(vc_train, 1),
+                    # oos true/pred distribution
                     'y_true_-1': g(vc_true, -1), 'y_true_0': g(vc_true, 0), 'y_true_1': g(vc_true, 1),
                     'y_pred_-1': g(vc_pred, -1), 'y_pred_0': g(vc_pred, 0), 'y_pred_1': g(vc_pred, 1)
                 })

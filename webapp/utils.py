@@ -64,3 +64,23 @@ def load_meta(base_dir: str = os.path.join('outputs', 'backtest')) -> Dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def load_fold_metrics(base_dir: str, candidate: str) -> pd.DataFrame:
+    """Load per-candidate fold_metrics.csv within a run directory."""
+    fm_path = os.path.join(base_dir, candidate, 'fold_metrics.csv')
+    if not os.path.exists(fm_path):
+        return pd.DataFrame()
+    return pd.read_csv(fm_path)
+
+
+def load_fold_ranges(base_dir: str) -> pd.DataFrame:
+    """Load fold date ranges (if exported by the backtest script).
+
+    Expected file: <run>/fold_ranges.csv
+    Columns (recommended): fold, train_start, train_end, test_start, test_end
+    """
+    path = os.path.join(base_dir, 'fold_ranges.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    return pd.read_csv(path)
